@@ -90,6 +90,41 @@ export function drawFrame(
     drawElement(ctx, el, table, view, t);
   }
 
+  // skill-shot lamp on the lit element
+  if (view.litElementId) {
+    const el = table.elements.find((e) => e.id === view.litElementId);
+    if (el && "pos" in el) {
+      const r = el.kind === "bumper" ? el.radius : 16;
+      const pulse = 0.5 + 0.5 * Math.sin(t / 140);
+      ctx.save();
+      ctx.strokeStyle = p.hot;
+      ctx.lineWidth = 3.5;
+      glow(ctx, p.hot, 16 + pulse * 10);
+      ctx.globalAlpha = 0.55 + 0.45 * pulse;
+      ctx.beginPath();
+      ctx.arc(el.pos.x, el.pos.y, r + 8 + pulse * 3, 0, Math.PI * 2);
+      ctx.stroke();
+      noGlow(ctx);
+      ctx.restore();
+    }
+  }
+
+  // ball-save window: pulsing launch lane
+  if (view.ballSaveActive) {
+    const pulse = 0.5 + 0.5 * Math.sin(t / 120);
+    ctx.save();
+    ctx.globalAlpha = 0.3 + 0.5 * pulse;
+    ctx.strokeStyle = p.glowA;
+    ctx.lineWidth = 4;
+    glow(ctx, p.glowA, 14);
+    ctx.beginPath();
+    ctx.moveTo(515, 936);
+    ctx.lineTo(515, 700);
+    ctx.stroke();
+    noGlow(ctx);
+    ctx.restore();
+  }
+
   // flippers
   drawFlippers(ctx, table, view);
 
@@ -310,6 +345,27 @@ function drawBackground(ctx: CanvasRenderingContext2D, table: TableDef, t: numbe
         ctx.globalAlpha = 0.3 + 0.4 * pseudo(i + 135);
         ctx.beginPath();
         ctx.arc(x, y, 1 + pseudo(i + 175) * 1.8, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+      break;
+    }
+    case "supernova": {
+      // golden halo behind the core + faint nebula + twinkling starfield
+      const g = ctx.createRadialGradient(255, 390, 30, 255, 390, 480);
+      g.addColorStop(0, "rgba(255,209,102,0.20)");
+      g.addColorStop(0.45, "rgba(69,224,245,0.08)");
+      g.addColorStop(1, "rgba(0,0,0,0)");
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, TABLE_WIDTH, TABLE_HEIGHT);
+      ctx.fillStyle = p.bgDetail;
+      for (let i = 0; i < 46; i++) {
+        const x = pseudo(i) * 500 + 20;
+        const y = pseudo(i + 200) * 900 + 30;
+        const tw = Math.abs(Math.sin(t / (700 + pseudo(i + 300) * 600) + i));
+        ctx.globalAlpha = 0.15 + 0.55 * tw * pseudo(i + 400);
+        ctx.beginPath();
+        ctx.arc(x, y, 0.6 + pseudo(i + 500) * 1.5, 0, Math.PI * 2);
         ctx.fill();
       }
       ctx.globalAlpha = 1;

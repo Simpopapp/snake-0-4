@@ -42,8 +42,8 @@ describe("NEONVOLT highscores", () => {
 });
 
 describe("NEONVOLT tables", () => {
-  it("all four tables validate with zero issues", () => {
-    expect(TABLES).toHaveLength(4);
+  it("all five tables validate with zero issues", () => {
+    expect(TABLES).toHaveLength(5);
     for (const table of TABLES) {
       expect(validateTable(table)).toEqual([]);
     }
@@ -63,6 +63,35 @@ describe("NEONVOLT tables", () => {
       if (goal.type === "group") {
         expect(table.elements.some((e) => e.kind === "target" && e.group === goal.groupId)).toBe(true);
       }
+    }
+  });
+
+  it("every table has two mini missions with valid goals (PRD project2 §6.4)", () => {
+    for (const table of TABLES) {
+      expect(table.miniMissions).toHaveLength(2);
+      for (const mini of table.miniMissions ?? []) {
+        const goal = mini.goal;
+        expect(mini.title).toBeTruthy();
+        expect(mini.hint).toBeTruthy();
+        expect(mini.score).toBeGreaterThanOrEqual(3000);
+        expect(mini.score).toBeLessThanOrEqual(7500);
+        if (goal.type === "hits") {
+          expect(table.elements.some((e) => e.id === goal.elementId)).toBe(true);
+        }
+        if (goal.type === "spinnerHold") {
+          expect(table.elements.some((e) => e.id === goal.spinnerId)).toBe(true);
+        }
+        if (goal.type === "group") {
+          expect(table.elements.some((e) => e.kind === "target" && e.group === goal.groupId)).toBe(true);
+        }
+      }
+    }
+  });
+
+  it("skill shot has lit candidates on every table (bumpers + targets)", () => {
+    for (const table of TABLES) {
+      const candidates = table.elements.filter((e) => e.kind === "bumper" || e.kind === "target");
+      expect(candidates.length).toBeGreaterThanOrEqual(2);
     }
   });
 });

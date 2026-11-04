@@ -9,6 +9,7 @@ import {
   type ErrorComponentProps,
 } from "@tanstack/react-router";
 import { useEffect, type ReactNode } from "react";
+import { Toaster } from "sonner";
 
 import appCss from "../styles.css?url";
 import { reportLovableError } from "../lib/lovable-error-reporting";
@@ -82,13 +83,13 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       {
         name: "description",
         content:
-          "NEONVOLT: pinball arcade no navegador com física real, 4 mesas neon temáticas, multiball e recordes.",
+          "NEONVOLT: pinball arcade no navegador com física real, 5 mesas neon temáticas, missões, torneio, conquistas e recordes.",
       },
       { name: "author", content: "NEONVOLT" },
       { property: "og:title", content: "NEONVOLT — Pinball Elétrico" },
       {
         property: "og:description",
-        content: "Pinball arcade no navegador: física real, 4 mesas neon, multiball e recordes.",
+        content: "Pinball arcade no navegador: física real, 5 mesas neon, torneio, conquistas e recordes.",
       },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },
@@ -134,6 +135,7 @@ function RootComponent() {
     <QueryClientProvider client={queryClient}>
       {/* Required: nested routes render here. Removing <Outlet /> breaks all child routes. */}
       <Outlet />
+      <Toaster position="top-center" theme="dark" richColors />
     </QueryClientProvider>
   );
 }

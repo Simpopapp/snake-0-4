@@ -12,13 +12,13 @@ export const Route = createFileRoute("/")({
       {
         name: "description",
         content:
-          "Jogue NEONVOLT: pinball arcade no navegador com física real, 4 mesas neon temáticas, multiball, missões e recordes.",
+          "Jogue NEONVOLT: pinball arcade no navegador com física real, 5 mesas neon temáticas, missões, torneio, conquistas e recordes.",
       },
       { property: "og:title", content: "NEONVOLT — Pinball Elétrico" },
       {
         property: "og:description",
         content:
-          "Pinball arcade no navegador: física real, 4 mesas neon temáticas, multiball e recordes.",
+          "Pinball arcade no navegador: física real, 5 mesas neon temáticas, torneio, conquistas e recordes.",
       },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },

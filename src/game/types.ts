@@ -10,7 +10,12 @@ export interface Vec2 {
 export const TABLE_WIDTH = 540;
 export const TABLE_HEIGHT = 960;
 
-export type TableId = "circuito-neon" | "forja-solar" | "abissal" | "criogenese";
+export type TableId =
+  | "circuito-neon"
+  | "forja-solar"
+  | "abissal"
+  | "criogenese"
+  | "supernova";
 
 /** Table color identity — everything in the renderer derives from this. */
 export interface TablePalette {
@@ -137,6 +142,15 @@ export interface TableMission {
   score: number;
 }
 
+/** Secondary mission: smaller goal, score-only reward, re-armable like the signature. */
+export interface MiniMission {
+  id: string;
+  title: string;
+  hint: string;
+  goal: MissionKind;
+  score: number;
+}
+
 export interface TableDef {
   id: TableId;
   name: string;
@@ -148,6 +162,8 @@ export interface TableDef {
   flippers: [FlipperDef, FlipperDef];
   launch: LaunchLane;
   mission: TableMission;
+  /** Secondary missions (2 per table); score-only rewards */
+  miniMissions?: MiniMission[];
   /** Extra engine tuning */
   ballRestitution?: number;
   ballRadius?: number;
@@ -156,6 +172,13 @@ export interface TableDef {
 }
 
 // ---------- Runtime types (engine → UI) ----------
+
+export interface MiniMissionHud {
+  id: string;
+  title: string;
+  progress: string;
+  done: boolean;
+}
 
 export interface HudSnapshot {
   tableId: TableId;
@@ -173,6 +196,14 @@ export interface HudSnapshot {
   kickbackArmed: boolean;
   muted: boolean;
   fps: number;
+  /** Element id currently lit for the skill shot (null when none) */
+  skillShotId: string | null;
+  /** Seconds left in the ball-save window (0 when off) */
+  ballSaveSeconds: number;
+  /** Current combo streak (consecutive hits inside the combo window) */
+  combo: number;
+  /** Secondary missions with live progress */
+  miniMissions: MiniMissionHud[];
 }
 
 export type GameEvent =
@@ -193,7 +224,15 @@ export type GameEvent =
   | { type: "tilt" }
   | { type: "gameOver"; finalScore: number }
   | { type: "shake"; strength: number }
-  | { type: "nudge" };
+  | { type: "nudge" }
+  | { type: "skillShotLit"; elementId: string }
+  | { type: "skillShotHit"; elementId: string; score: number }
+  | { type: "skillShotMiss" }
+  | { type: "ballSaveUsed" }
+  | { type: "ballSaved" }
+  | { type: "combo"; count: number; score: number }
+  | { type: "miniMissionComplete"; id: string; title: string; score: number }
+  | { type: "tournamentTableComplete"; tableId: TableId; score: number };
 
 export interface GameCallbacks {
   onHud?: (hud: HudSnapshot) => void;
@@ -215,6 +254,16 @@ export interface GameHandle {
   resume: () => void;
   input: (input: GameInput) => void;
   destroy: () => void;
+}
+
+/** Per-game numbers collected by the engine for the meta layer. */
+export interface GameStatsSummary {
+  durationMs: number;
+  ballsLaunched: number;
+  skillShots: number;
+  ballSaves: number;
+  bestCombo: number;
+  missionCompleted: boolean;
 }
 
 // ---------- Persistence ----------

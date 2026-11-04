@@ -1,7 +1,7 @@
 // NEONVOLT — the four tables. Interior content integrated from the swarm
 // table-design spec; the standard frame (borders, lane, guides, kickback,
 // drain) is built by the engine (src/game/frame.ts).
-import type { FlipperDef, TableDef, TableElement, WallChain } from "../types";
+import type { FlipperDef, MiniMission, TableDef, TableElement, WallChain } from "../types";
 
 export const PALETTES = {
   "circuito-neon": {
@@ -55,6 +55,73 @@ const FLIPPERS: [FlipperDef, FlipperDef] = [
 
 const LAUNCH = { x: 515, ballRestY: 918, power: 46 };
 
+const MINIS: Record<"neon" | "forja" | "abyss" | "cryo", MiniMission[]> = {
+  neon: [
+    {
+      id: "neon-mini-malha",
+      title: "Malha Rápida",
+      hint: "Mantenha o spinner girando por 4s nesta bola.",
+      goal: { type: "spinnerHold", spinnerId: "neon-spinner", seconds: 4 },
+      score: 5000,
+    },
+    {
+      id: "neon-mini-rele",
+      title: "Relé em Cadeia",
+      hint: "Entre 3 vezes no relé nesta bola.",
+      goal: { type: "hits", elementId: "neon-relay", count: 3 },
+      score: 6000,
+    },
+  ],
+  forja: [
+    {
+      id: "forja-mini-turbina",
+      title: "Turbina Aquecida",
+      hint: "Sustente a turbina girando por 3s nesta bola.",
+      goal: { type: "spinnerHold", spinnerId: "forja-turbine", seconds: 3 },
+      score: 5000,
+    },
+    {
+      id: "forja-mini-pressao",
+      title: "Pressão Máxima",
+      hint: "Acerte o forno esquerdo 6 vezes nesta bola.",
+      goal: { type: "hits", elementId: "forja-furnace-left", count: 6 },
+      score: 6000,
+    },
+  ],
+  abyss: [
+    {
+      id: "abyss-mini-correnteza",
+      title: "Correnteza",
+      hint: "Gire a correnteza por 3,5s nesta bola.",
+      goal: { type: "spinnerHold", spinnerId: "abyss-current", seconds: 3.5 },
+      score: 5000,
+    },
+    {
+      id: "abyss-mini-plankton",
+      title: "Plâncton Brilhante",
+      hint: "Derrube o grupo de caranguejos nesta bola.",
+      goal: { type: "group", groupId: "abyss-crabs" },
+      score: 6000,
+    },
+  ],
+  cryo: [
+    {
+      id: "cryo-mini-selos",
+      title: "Lacunas Selladas",
+      hint: "Derrube o grupo de selos nesta bola.",
+      goal: { type: "group", groupId: "cryo-seals" },
+      score: 6000,
+    },
+    {
+      id: "cryo-mini-cristal",
+      title: "Cristal Ressonante",
+      hint: "Acerte o cristal oeste 12 vezes nesta bola.",
+      goal: { type: "hits", elementId: "cryo-bumper-crystal-1", count: 12 },
+      score: 5500,
+    },
+  ],
+};
+
 const deflectors = {
   neon: [
     { id: "neon-left-return", points: [{ x: 45, y: 470 }, { x: 65, y: 530 }, { x: 100, y: 575 }] },
@@ -103,6 +170,7 @@ export const circuitoNeon: TableDef = {
     reward: { type: "multiball", balls: 2 },
     score: 12000,
   },
+  miniMissions: MINIS["neon"],
 };
 
 export const forjaSolar: TableDef = {
@@ -135,6 +203,7 @@ export const forjaSolar: TableDef = {
     reward: { type: "jackpot", score: 15000 },
     score: 12000,
   },
+  miniMissions: MINIS["forja"],
 };
 
 export const abissal: TableDef = {
@@ -167,6 +236,7 @@ export const abissal: TableDef = {
     reward: { type: "multiball", balls: 1 },
     score: 15000,
   },
+  miniMissions: MINIS["abyss"],
 };
 
 export const criogenese: TableDef = {
@@ -199,9 +269,80 @@ export const criogenese: TableDef = {
     reward: { type: "iceBall", seconds: 12 },
     score: 12000,
   },
+  miniMissions: MINIS["cryo"],
 };
 
-export const TABLES = [circuitoNeon, forjaSolar, abissal, criogenese] as const;
+export const supernova: TableDef = {
+  id: "supernova",
+  name: "Supernova",
+  subtitle: "Estabilize o pulsar. Desencadeie a supernova.",
+  palette: {
+    bg: "#050b18",
+    bgDetail: "#173449",
+    wall: "#7de7ff",
+    glowA: "#ffd166",
+    glowB: "#45e0f5",
+    hot: "#fff1c2",
+    dim: "#52647a",
+  },
+  gravity: 1.0,
+  ballRadius: 7,
+  ballRestitution: 0.82,
+  maxBalls: 3,
+  // órbitas: sensores de passagem (gate) + defletores laterais (spec s2)
+  walls: [
+    { id: "supernova-deflector-left", points: [{ x: 42, y: 420 }, { x: 65, y: 490 }, { x: 105, y: 555 }], rail: 14 },
+    { id: "supernova-deflector-right", points: [{ x: 455, y: 420 }, { x: 432, y: 490 }, { x: 392, y: 555 }], rail: 14 },
+    {
+      id: "supernova-orbit-left",
+      gate: true,
+      points: [{ x: 65, y: 190 }, { x: 115, y: 155 }, { x: 155, y: 100 }, { x: 220, y: 80 }, { x: 255, y: 120 }, { x: 245, y: 185 }],
+    },
+    {
+      id: "supernova-orbit-right",
+      gate: true,
+      points: [{ x: 385, y: 155 }, { x: 450, y: 185 }, { x: 420, y: 105 }, { x: 355, y: 80 }, { x: 295, y: 110 }, { x: 285, y: 185 }],
+    },
+  ] as WallChain[],
+  elements: [
+    ...SLINGS,
+    { kind: "bumper", id: "supernova-planet-core", pos: { x: 255, y: 390 }, radius: 36, score: 350, power: 24, color: "glowA" },
+    { kind: "bumper", id: "supernova-planet-left", pos: { x: 160, y: 260 }, radius: 26, score: 225, power: 20, color: "glowB" },
+    { kind: "bumper", id: "supernova-planet-right", pos: { x: 350, y: 260 }, radius: 26, score: 250, power: 21, color: "glowA" },
+    { kind: "target", id: "supernova-target-nova-left", pos: { x: 85, y: 330 }, w: 5, h: 17, angle: 0, score: 500, group: "supernova-nova" },
+    { kind: "target", id: "supernova-target-nova-right", pos: { x: 425, y: 330 }, w: 5, h: 17, angle: 0, score: 500, group: "supernova-nova" },
+    { kind: "target", id: "supernova-target-nova-lower", pos: { x: 350, y: 595 }, w: 5, h: 17, angle: 0, score: 500, group: "supernova-nova" },
+    { kind: "spinner", id: "supernova-pulsar", pos: { x: 255, y: 550 }, length: 64, score: 150 },
+    { kind: "kicker", id: "supernova-white-hole", pos: { x: 115, y: 640 }, radius: 18, ejectTo: { x: 330, y: 460 }, score: 800, hold: 0.75 },
+  ],
+  flippers: FLIPPERS,
+  launch: LAUNCH,
+  mission: {
+    title: "Explosão Supernova",
+    hint: "Derrube os 3 alvos NOVA para liberar mais 2 bolas.",
+    goal: { type: "group", groupId: "supernova-nova" },
+    reward: { type: "multiball", balls: 2 },
+    score: 15000,
+  },
+  miniMissions: [
+    {
+      id: "supernova-orbita-estavel",
+      title: "Órbita Estável",
+      hint: "Acumule 2s de rotação no pulsar.",
+      goal: { type: "spinnerHold", spinnerId: "supernova-pulsar", seconds: 2 },
+      score: 5000,
+    },
+    {
+      id: "supernova-colapso-inicial",
+      title: "Colapso Inicial",
+      hint: "Acerte o núcleo planetário 15 vezes.",
+      goal: { type: "hits", elementId: "supernova-planet-core", count: 15 },
+      score: 7500,
+    },
+  ],
+};
+
+export const TABLES = [circuitoNeon, forjaSolar, abissal, criogenese, supernova] as const;
 
 export function getTable(id: string): TableDef {
   const found = TABLES.find((t) => t.id === id);

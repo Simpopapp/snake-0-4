@@ -1,19 +1,41 @@
-// NEONVOLT — game screen: canvas, engine wiring, HUD, overlays, controls.
+// NEONVOLT — game screen: canvas, engine wiring, HUD, overlays, controls,
+// music lifecycle, metagame result overlays (single game and tournament).
 import { Pause, Volume2, VolumeX } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { ensureAudio, playEvent } from "@/game/audio";
+import { ensureAudio, playEvent, startMusic, stopMusic } from "@/game/audio";
 import { PinballGame, type RenderView } from "@/game/engine";
 import { drawFrame } from "@/game/renderer";
 import type { FxState } from "@/game/fx";
-import type { GameEvent, HudSnapshot, TableDef } from "@/game/types";
+import type { AchievementId, } from "@/game/progress";
+import type { GameEvent, GameStatsSummary, HudSnapshot, TableDef } from "@/game/types";
 import { cn } from "@/lib/utils";
+
+export interface GameResult {
+  score: number;
+  stats: GameStatsSummary;
+  isRecord: boolean;
+  unlocked: AchievementId[];
+  /** Tournament: cumulative total after this table */
+  tournamentTotal?: number;
+  /** Tournament: this was the last table */
+  tournamentFinal?: boolean;
+}
+
+export interface TournamentInfo {
+  tableIndex: number;
+  totalSoFar: number;
+  tablesTotal: number;
+}
 
 interface GameScreenProps {
   table: TableDef;
+  tournament?: TournamentInfo | undefined;
+  result: GameResult | null;
   onExit: () => void;
   onRestart: () => void;
-  onGameOver: (finalScore: number) => void;
+  onGameOver: (finalScore: number, stats: GameStatsSummary) => void;
+  onTournamentNext: () => void;
   muted: boolean;
   onToggleMute: () => void;
 }
@@ -34,15 +56,38 @@ const INITIAL_HUD: HudSnapshot = {
   kickbackArmed: true,
   muted: false,
   fps: 60,
+  skillShotId: null,
+  ballSaveSeconds: 0,
+  combo: 0,
+  miniMissions: [],
 };
 
-export function GameScreen({ table, onExit, onRestart, onGameOver, muted, onToggleMute }: GameScreenProps) {
+export function GameScreen({
+  table,
+  tournament,
+  result,
+  onExit,
+  onRestart,
+  onGameOver,
+  onTournamentNext,
+  muted,
+  onToggleMute,
+}: GameScreenProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const gameRef = useRef<PinballGame | null>(null);
   const pausedRef = useRef(false);
+  const mutedRef = useRef(muted);
+  mutedRef.current = muted;
   const [hud, setHud] = useState<HudSnapshot>({ ...INITIAL_HUD, tableId: table.id, tableName: table.name });
   const [paused, setPaused] = useState(false);
   const [gameOver, setGameOver] = useState(false);
+
+  /** Unlock audio and start the table's ambient music (first gesture). */
+  const wakeRef = useRef<() => void>(() => {});
+  wakeRef.current = () => {
+    ensureAudio();
+    if (!mutedRef.current) startMusic(table.id);
+  };
 
   // engine lifecycle
   useEffect(() => {
@@ -61,16 +106,22 @@ export function GameScreen({ table, onExit, onRestart, onGameOver, muted, onTogg
     const observer = new ResizeObserver(resize);
     observer.observe(canvas);
 
-    const game = new PinballGame(canvas, table, {
-      onHud: (snapshot) => setHud(snapshot),
-      onEvent: (evt: GameEvent) => {
-        playEvent(evt);
-        if (evt.type === "gameOver") {
-          setGameOver(true);
-          onGameOver(evt.finalScore);
-        }
+    const game = new PinballGame(
+      canvas,
+      table,
+      {
+        onHud: (snapshot) => setHud(snapshot),
+        onEvent: (evt: GameEvent) => {
+          playEvent(evt);
+          if (evt.type === "gameOver") {
+            stopMusic();
+            setGameOver(true);
+            onGameOver(evt.finalScore, game.getStats());
+          }
+        },
       },
-    });
+      { balls: tournament ? 2 : 3 },
+    );
     game.setDrawFn((view: RenderView, fx: FxState, t: number) => drawFrame(ctx, table, view, fx, t));
     game.start();
     gameRef.current = game;
@@ -85,6 +136,7 @@ export function GameScreen({ table, onExit, onRestart, onGameOver, muted, onTogg
       touchRight.current.clear();
       activePointers.current.clear();
       game.pause();
+      stopMusic();
       pausedRef.current = true;
       setPaused(true);
     };
@@ -99,16 +151,24 @@ export function GameScreen({ table, onExit, onRestart, onGameOver, muted, onTogg
       window.removeEventListener("blur", releaseAndPause);
       observer.disconnect();
       delete (window as unknown as { __nvGame?: unknown }).__nvGame;
+      stopMusic();
       game.destroy();
       gameRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [table.id]);
 
+  // mute toggle controls the ambient music too
+  useEffect(() => {
+    if (muted) stopMusic();
+    else if (!pausedRef.current && !gameOver) startMusic(table.id);
+  }, [muted, table.id, gameOver]);
+
   // keyboard
   useEffect(() => {
     const game = () => gameRef.current;
     const down = (e: KeyboardEvent) => {
+      wakeRef.current();
       switch (e.code) {
         case "ArrowLeft":
         case "KeyZ":
@@ -125,7 +185,6 @@ export function GameScreen({ table, onExit, onRestart, onGameOver, muted, onTogg
         case "ArrowDown":
         case "Space":
         case "Enter":
-          ensureAudio();
           game()?.input("plungerDown");
           e.preventDefault();
           break;
@@ -139,8 +198,15 @@ export function GameScreen({ table, onExit, onRestart, onGameOver, muted, onTogg
           const g = game();
           if (!g) break;
           pausedRef.current = !pausedRef.current;
-          if (pausedRef.current) g.pause();
-          else g.resume();
+          if (pausedRef.current) {
+            g.pause();
+            stopMusic();
+          } else if (!mutedRef.current) {
+            g.resume();
+            startMusic(table.id);
+          } else {
+            g.resume();
+          }
           setPaused(pausedRef.current);
           e.preventDefault();
           break;
@@ -176,7 +242,8 @@ export function GameScreen({ table, onExit, onRestart, onGameOver, muted, onTogg
       window.removeEventListener("keydown", down);
       window.removeEventListener("keyup", up);
     };
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [table.id]);
 
   // touch flippers: multitouch via pointer events on the two halves
   const touchLeft = useRef(new Set<number>());
@@ -184,7 +251,7 @@ export function GameScreen({ table, onExit, onRestart, onGameOver, muted, onTogg
   const activePointers = useRef(new Map<number, "left" | "right" | "plunger">());
 
   const pointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    ensureAudio();
+    wakeRef.current();
     const rect = e.currentTarget.getBoundingClientRect();
     const rel = (e.clientX - rect.left) / rect.width;
     if (rel < 0.44) {
@@ -219,6 +286,7 @@ export function GameScreen({ table, onExit, onRestart, onGameOver, muted, onTogg
     pausedRef.current = false;
     setPaused(false);
     gameRef.current?.resume();
+    if (!mutedRef.current) startMusic(table.id);
   };
 
   const restart = () => {
@@ -226,6 +294,16 @@ export function GameScreen({ table, onExit, onRestart, onGameOver, muted, onTogg
   };
 
   const format = (n: number) => n.toLocaleString("pt-BR");
+  const formatTime = (ms: number) => {
+    const s = Math.round(ms / 1000);
+    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+  };
+
+  const overlayTitle = tournament
+    ? result?.tournamentFinal
+      ? "TORNEIO COMPLETO"
+      : `MESA ${tournament.tableIndex + 1} CONCLUÍDA`
+    : "FIM DE JOGO";
 
   return (
     <div className="relative flex h-dvh flex-col bg-background">
@@ -236,7 +314,7 @@ export function GameScreen({ table, onExit, onRestart, onGameOver, muted, onTogg
             {format(hud.score)}
           </p>
           <p className="text-[10px] uppercase tracking-widest text-muted-foreground">
-            {table.name} · bola {hud.ballNumber}/3
+            {table.name} · bola {hud.ballNumber}/{tournament ? 2 : 3}
           </p>
         </div>
         <div className="flex flex-col items-center px-2">
@@ -262,6 +340,16 @@ export function GameScreen({ table, onExit, onRestart, onGameOver, muted, onTogg
               {hud.multiball} BOLAS
             </span>
           )}
+          {hud.combo >= 2 && (
+            <span className="font-display rounded-md bg-accent/20 px-2 py-1 text-sm text-accent">
+              COMBO ×{hud.combo}
+            </span>
+          )}
+          {hud.ballSaveSeconds > 0 && (
+            <span className="font-display rounded-md bg-primary/20 px-2 py-1 text-sm text-primary">
+              SALVA-BOLA {Math.ceil(hud.ballSaveSeconds)}s
+            </span>
+          )}
           <span
             className={cn(
               "rounded-md px-2 py-1 text-xs",
@@ -284,6 +372,7 @@ export function GameScreen({ table, onExit, onRestart, onGameOver, muted, onTogg
             className="rounded-lg border border-border p-2 text-muted-foreground hover:text-foreground"
             onClick={() => {
               gameRef.current?.pause();
+              stopMusic();
               setPaused(true);
             }}
           >
@@ -291,6 +380,23 @@ export function GameScreen({ table, onExit, onRestart, onGameOver, muted, onTogg
           </button>
         </div>
       </div>
+
+      {/* mini missions strip */}
+      {hud.miniMissions.length > 0 && (
+        <div className="flex items-center justify-center gap-4 px-3 pb-1 sm:gap-6">
+          {hud.miniMissions.map((m) => (
+            <span
+              key={m.id}
+              className={cn(
+                "text-[10px] uppercase tracking-widest",
+                m.done ? "text-primary nv-glow-text" : "text-muted-foreground",
+              )}
+            >
+              {m.title} {m.progress}
+            </span>
+          ))}
+        </div>
+      )}
 
       {/* playfield */}
       <div className="relative flex min-h-0 flex-1 items-center justify-center px-1 pb-1 sm:px-3 sm:pb-3">
@@ -323,20 +429,46 @@ export function GameScreen({ table, onExit, onRestart, onGameOver, muted, onTogg
         </Overlay>
       )}
 
-      {/* game over overlay */}
-      {gameOver && (
-        <Overlay title="FIM DE JOGO">
-          <p className="font-display text-5xl text-primary nv-glow-text">{format(hud.score)}</p>
-          <p className="mb-2 text-sm text-muted-foreground">pontos finais</p>
+      {/* result overlay: game over or tournament table complete */}
+      {gameOver && result && (
+        <Overlay title={overlayTitle}>
+          <p className="font-display text-5xl text-primary nv-glow-text">{format(result.score)}</p>
+          <p className="text-sm text-muted-foreground">
+            {result.tournamentFinal ? "mesa final" : tournament ? "pontos nesta mesa" : "pontos finais"}
+          </p>
+          {result.isRecord && (
+            <p className="font-display text-lg tracking-widest text-accent nv-glow-text">★ NOVO RECORDE ★</p>
+          )}
+          {result.tournamentTotal !== undefined && (
+            <p className="font-display text-2xl tracking-widest text-accent">
+              TOTAL: {format(result.tournamentTotal)}
+            </p>
+          )}
+          <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-xs text-muted-foreground sm:grid-cols-4">
+            <span>tempo: {formatTime(result.stats.durationMs)}</span>
+            <span>lançamentos: {result.stats.ballsLaunched}</span>
+            <span>skill shots: {result.stats.skillShots}</span>
+            <span>ball saves: {result.stats.ballSaves}</span>
+            <span>maior combo: ×{result.stats.bestCombo}</span>
+            <span>missão: {result.stats.missionCompleted ? "concluída" : "—"}</span>
+          </div>
           <div className="flex flex-col gap-3">
-            <MenuButton
-              onClick={() => {
-                setGameOver(false);
-                restart();
-              }}
-            >
-              JOGAR NOVAMENTE
-            </MenuButton>
+            {tournament && !result.tournamentFinal && (
+              <MenuButton onClick={onTournamentNext}>PRÓXIMA MESA</MenuButton>
+            )}
+            {tournament && result.tournamentFinal && (
+              <MenuButton onClick={onTournamentNext}>VOLTAR AO MENU</MenuButton>
+            )}
+            {!tournament && (
+              <MenuButton
+                onClick={() => {
+                  setGameOver(false);
+                  restart();
+                }}
+              >
+                JOGAR NOVAMENTE
+              </MenuButton>
+            )}
             <MenuButton variant="ghost" onClick={onExit}>
               MENU
             </MenuButton>
@@ -350,7 +482,7 @@ export function GameScreen({ table, onExit, onRestart, onGameOver, muted, onTogg
 function Overlay({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/70 backdrop-blur-sm">
-      <div className="flex flex-col items-center gap-4 rounded-2xl border border-border bg-card/90 p-8 text-center shadow-2xl">
+      <div className="flex max-h-[90dvh] flex-col items-center gap-4 overflow-y-auto rounded-2xl border border-border bg-card/90 p-8 text-center shadow-2xl">
         <h2 className="font-display text-4xl tracking-widest text-foreground">{title}</h2>
         {children}
       </div>

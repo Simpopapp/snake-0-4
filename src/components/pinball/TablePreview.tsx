@@ -22,6 +22,9 @@ function staticView(table: TableDef): RenderView {
     ballReady: false,
     tilt: false,
     tableJustName: table.name,
+    litElementId: null,
+    ballSaveActive: false,
+    combo: 0,
   };
 }
 

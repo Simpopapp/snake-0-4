@@ -12,7 +12,9 @@ import {
   type GameEvent,
   type GameHandle,
   type GameInput,
+  type GameStatsSummary,
   type HudSnapshot,
+  type MiniMission,
   type MissionKind,
   type MissionReward,
   type TableDef,
@@ -28,6 +30,13 @@ const STUCK_TICKS_HARD = 300; // 5s
 const TARGET_RESET_TICKS = 330; // ~5.5s
 const FLIPPER_SPEED = 0.28; // rad per tick (~17 rad/s)
 const MAX_BALLS = 3;
+const COMBO_WINDOW_TICKS = 150; // 2.5s
+const COMBO_MILESTONES = [
+  { count: 5, score: 1000 },
+  { count: 10, score: 2500 },
+  { count: 20, score: 5000 },
+  { count: 35, score: 10000 },
+];
 
 interface NvPlugin {
   nv: "ball" | "bumper" | "sling" | "target" | "spinner" | "kicker" | "drain" | "kickback" | "gate" | "wall";
@@ -72,6 +81,12 @@ export interface RenderView {
   ballReady: boolean;
   tilt: boolean;
   tableJustName: string;
+  /** Element lit for the skill shot (renderer draws the lamp) */
+  litElementId: string | null;
+  /** Ball-save window active (renderer pulses the launch lane) */
+  ballSaveActive: boolean;
+  /** Live combo counter */
+  combo: number;
 }
 
 function seg(x1: number, y1: number, x2: number, y2: number, t: number, plugin: NvPlugin): NvBody {
@@ -86,6 +101,12 @@ function seg(x1: number, y1: number, x2: number, y2: number, t: number, plugin: 
   }) as NvBody;
   body.plugin = plugin;
   return body;
+}
+
+/** Engine construction options. */
+export interface GameOptions {
+  /** Balls for the whole game (default 3; tournament tables use 2) */
+  balls?: number;
 }
 
 export class PinballGame implements GameHandle {
@@ -133,6 +154,31 @@ export class PinballGame implements GameHandle {
   private missionDoneFlash = 0;
   private lastFps = 60;
 
+  // skill shot (PRD project2 §6.1)
+  private skillShotId: string | null = null;
+  private skillShotDeadline = 0;
+  private skillShotCandidates: string[] = [];
+  private skillShotCount = 0;
+  private skillShotsGame = 0;
+
+  // ball save (PRD §6.2): ticks left in the window, once per launch
+  private ballSaveTicks = 0;
+  private savedThisLaunch = false;
+
+  // combo (PRD §6.3)
+  private comboCount = 0;
+  private comboLastTick = -9999;
+  private bestComboGame = 0;
+
+  // mini missions (PRD §6.4)
+  private miniState = new Map<string, { armed: boolean; doneFlash: number; hits: number; groups: number }>();
+
+  // per-game stats for the meta layer (progress.ts)
+  private gameStartMs = 0;
+  private ballsLaunchedGame = 0;
+  private ballSavesGame = 0;
+  private missionCompletionsGame = 0;
+
   private fx: FxState = createFx();
   private view: RenderView;
   private hudFrame = 0;
@@ -143,10 +189,11 @@ export class PinballGame implements GameHandle {
   private drawFn: (view: RenderView, fx: FxState, t: number) => void = () => {};
   private collisionHandler = (evt: Matter.IEventCollision<Matter.Engine>) => this.onCollisions(evt);
 
-  constructor(canvas: HTMLCanvasElement, table: TableDef, cbs: GameCallbacks = {}) {
+  constructor(canvas: HTMLCanvasElement, table: TableDef, cbs: GameCallbacks = {}, options: GameOptions = {}) {
     this.canvas = canvas;
     this.table = table;
     this.cbs = cbs;
+    this.ballsRemaining = options.balls ?? 3;
 
     this.engine = Matter.Engine.create({
       positionIterations: 8,
@@ -166,6 +213,9 @@ export class PinballGame implements GameHandle {
       ballReady: false,
       tilt: false,
       tableJustName: table.name,
+      litElementId: null,
+      ballSaveActive: false,
+      combo: 0,
     };
 
     this.buildFrame();
@@ -367,6 +417,13 @@ export class PinballGame implements GameHandle {
   start(): void {
     if (this.phase !== "idle") return;
     this.phase = "ready";
+    this.gameStartMs = performance.now();
+    this.skillShotCandidates = this.table.elements
+      .filter((e) => e.kind === "bumper" || e.kind === "target")
+      .map((e) => e.id);
+    for (const mini of this.table.miniMissions ?? []) {
+      this.miniState.set(mini.id, { armed: true, doneFlash: 0, hits: 0, groups: 0 });
+    }
     this.serveBall();
     this.lastTime = performance.now();
     const loop = (now: number) => {
@@ -459,8 +516,10 @@ export class PinballGame implements GameHandle {
         this.plungerDown = false;
         const power = 0.5 + 0.5 * this.plungerCharge;
         const lane = this.table.launch;
+        let launched = false;
         for (const b of this.balls) {
           if (this.inLane(b.body)) {
+            launched = true;
             Matter.Body.setVelocity(b.body, { x: 0, y: -lane.power * power });
             this.emit({ type: "launch", power });
             addShake(this.fx, 3 + 4 * this.plungerCharge);
@@ -469,6 +528,13 @@ export class PinballGame implements GameHandle {
               dir: { x: 0, y: -1 },
             });
           }
+        }
+        if (launched) {
+          this.ballsLaunchedGame++;
+          // ball save window: 8s after every launch, one save per launch
+          this.ballSaveTicks = 480;
+          this.savedThisLaunch = false;
+          this.armSkillShot();
         }
         if (this.balls.length > 0) this.phase = "play";
         this.plungerCharge = 0;
@@ -605,6 +671,12 @@ export class PinballGame implements GameHandle {
       }
     }
 
+    // skill shot window / ball save window / combo window / mini missions
+    this.skillShotTick();
+    if (this.ballSaveTicks > 0) this.ballSaveTicks--;
+    if (this.comboCount > 0 && this.tick - this.comboLastTick > COMBO_WINDOW_TICKS) this.comboCount = 0;
+    this.miniTick();
+
     Matter.Engine.update(this.engine, FIXED_DT);
     // safety net: recover balls that escaped the playfield entirely
     for (const entry of [...this.balls]) {
@@ -633,6 +705,9 @@ export class PinballGame implements GameHandle {
     this.view.plungerCharge = this.plungerCharge;
     this.view.ballReady = this.balls.some((b) => this.inLane(b.body) && Math.hypot(b.body.velocity.x, b.body.velocity.y) < 1.5);
     this.view.tilt = this.tilt;
+    this.view.litElementId = this.skillShotId;
+    this.view.ballSaveActive = this.ballSaveTicks > 0;
+    this.view.combo = this.comboCount;
   }
 
   // ------------------------------------------------------------- collisions
@@ -682,6 +757,16 @@ export class PinballGame implements GameHandle {
     const gained = base * multiplier * multiballBonus;
     this.score += gained;
     this.streak++;
+    // combo: consecutive scoring hits within the combo window
+    this.comboCount = this.tick - this.comboLastTick <= COMBO_WINDOW_TICKS ? this.comboCount + 1 : 1;
+    this.comboLastTick = this.tick;
+    this.bestComboGame = Math.max(this.bestComboGame, this.comboCount);
+    const milestone = COMBO_MILESTONES.find((m) => m.count === this.comboCount);
+    if (milestone) {
+      this.score += milestone.score;
+      this.emit({ type: "combo", count: this.comboCount, score: milestone.score });
+      addFlash(this.fx, 0.3);
+    }
     if (pos) {
       spawnBurst(this.fx, pos, this.table.palette.glowA, 8, 3.2);
     }
@@ -698,6 +783,7 @@ export class PinballGame implements GameHandle {
       y: ball.velocity.y * 0.4 + (dy / d) * other.plugin.power!,
     });
     const gained = this.addScore(other.plugin.score ?? el.score, pos);
+    this.trySkillShot(el.id);
     this.emit({ type: "bumperHit", elementId: el.id, score: gained, pos });
     addShake(this.fx, 2);
     this.countHit(el.id);
@@ -726,6 +812,7 @@ export class PinballGame implements GameHandle {
     Matter.Composite.remove(this.world, other);
     this.targetBodies.delete(id);
     const gained = this.addScore(other.plugin.score ?? el.score, pos);
+    this.trySkillShot(id);
     this.emit({ type: "targetDown", elementId: id, groupId: el.group, pos });
     addShake(this.fx, 3);
     // group cleared?
@@ -735,6 +822,7 @@ export class PinballGame implements GameHandle {
     if (groupTargets.length === 0) {
       this.score += 2500;
       this.emit({ type: "groupCleared", groupId: el.group, score: 2500 });
+      this.miniCountGroup(el.group);
       addFlash(this.fx, 0.35);
       addShake(this.fx, 7);
       this.timers.push({
@@ -806,6 +894,26 @@ export class PinballGame implements GameHandle {
 
   private drainBall(ball: NvBody): void {
     if (this.kickerHolds.some((h) => h.body === ball)) return;
+    // ball save: last ball drains inside the window → re-serve without cost
+    if (
+      this.ballSaveTicks > 0 &&
+      !this.savedThisLaunch &&
+      this.balls.length === 1 &&
+      this.phase !== "gameover"
+    ) {
+      Matter.Composite.remove(this.world, ball);
+      this.balls = [];
+      this.ballSaveTicks = 0;
+      this.savedThisLaunch = true;
+      this.skillShotId = null;
+      this.ballSavesGame++;
+      this.timers.push({ ticksLeft: 45, fn: () => this.serveBall() });
+      addFlash(this.fx, 0.35);
+      addShake(this.fx, 6);
+      this.emit({ type: "ballSaveUsed" });
+      this.emit({ type: "ballSaved" });
+      return;
+    }
     Matter.Composite.remove(this.world, ball);
     this.balls = this.balls.filter((b) => b.body !== ball);
     if (this.balls.length > 0) {
@@ -820,6 +928,7 @@ export class PinballGame implements GameHandle {
     this.tilt = false;
     this.nudgeTimes = [];
     this.streak = 0;
+    this.comboCount = 0;
     this.kickbackArmed = true;
     this.spinnerHoldTicks.forEach((_, id) => this.spinnerHoldTicks.set(id, 0));
     this.ballsRemaining--;
@@ -854,6 +963,7 @@ export class PinballGame implements GameHandle {
 
   private countHit(elementId: string): void {
     this.hitCount.set(elementId, (this.hitCount.get(elementId) ?? 0) + 1);
+    this.miniCountHit(elementId);
   }
 
   private missionProgress(): { done: boolean; text: string } {
@@ -885,6 +995,46 @@ export class PinballGame implements GameHandle {
     this.missionTick(true);
   }
 
+  /**
+   * DEV-only: places the first ball at an element with a proper Matter
+   * setPosition (bounds stay consistent) and launches it upward — E2E hook.
+   */
+  debugPlaceBall(elementId: string): void {
+    if (!import.meta.env.DEV) return;
+    const ball = this.balls[0]?.body;
+    if (!ball) return;
+    const el = this.table.elements.find((e) => e.id === elementId);
+    const wall = this.table.walls.find((w) => w.id === elementId);
+    let x: number | undefined;
+    let y: number | undefined;
+    let vy = -14;
+    if (el && "pos" in el) {
+      const r = "radius" in el ? el.radius : 8;
+      x = el.pos.x;
+      y = el.pos.y + r + 9;
+    } else if (wall) {
+      // gate sensors only exist on the first segment (points[0] → points[1])
+      const p0 = wall.points[0];
+      const p1 = wall.points[1] ?? p0;
+      if (!p0 || !p1) return;
+      x = (p0.x + p1.x) / 2;
+      y = (p0.y + p1.y) / 2 + 12;
+      vy = -10;
+    }
+    if (x === undefined || y === undefined) return;
+    Matter.Body.setPosition(ball, { x, y });
+    Matter.Body.setVelocity(ball, { x: 0, y: vy });
+  }
+
+  /** DEV-only: sends the last ball into the drain (E2E hook). */
+  debugDrainBall(): void {
+    if (!import.meta.env.DEV) return;
+    const ball = this.balls[this.balls.length - 1]?.body;
+    if (!ball) return;
+    Matter.Body.setPosition(ball, { x: 270, y: 995 });
+    Matter.Body.setVelocity(ball, { x: 0, y: 8 });
+  }
+
   private missionTick(force = false): void {
     if (this.missionDoneFlash > 0 && !force) {
       this.missionDoneFlash -= 1 / 60;
@@ -901,6 +1051,7 @@ export class PinballGame implements GameHandle {
       this.spinnerHoldTicks.set(this.table.mission.goal.spinnerId, 0);
     }
     this.emit({ type: "missionComplete", score: this.table.mission.score, title: this.table.mission.title });
+    this.missionCompletionsGame++;
     addFlash(this.fx, 0.8);
     addShake(this.fx, 10);
     switch (reward.type) {
@@ -968,6 +1119,121 @@ export class PinballGame implements GameHandle {
     this.phase = "play";
   }
 
+  // ------------------------------------------------- skill shot + minis
+
+  private armSkillShot(): void {
+    if (this.skillShotCandidates.length === 0) return;
+    const id = this.skillShotCandidates[this.skillShotCount % this.skillShotCandidates.length];
+    if (!id) return;
+    this.skillShotCount++;
+    this.skillShotId = id;
+    this.skillShotDeadline = this.tick + 180; // 3s window
+    this.emit({ type: "skillShotLit", elementId: id });
+  }
+
+  private skillShotTick(): void {
+    if (!this.skillShotId) return;
+    if (this.tick > this.skillShotDeadline) {
+      this.skillShotId = null;
+      this.emit({ type: "skillShotMiss" });
+    }
+  }
+
+  /** Pays the skill-shot bonus when the hit element is the lit one. */
+  private trySkillShot(elementId: string): void {
+    if (this.skillShotId !== elementId || this.tick > this.skillShotDeadline) return;
+    this.skillShotId = null;
+    this.skillShotsGame++;
+    const bonus = 2500 + 500 * Math.min(3, this.skillShotsGame - 1);
+    this.score += bonus;
+    addFlash(this.fx, 0.4);
+    addShake(this.fx, 6);
+    spawnBurst(this.fx, { x: 270, y: 480 }, this.table.palette.hot, 24, 5);
+    this.emit({ type: "skillShotHit", elementId, score: bonus });
+  }
+
+  private miniCountHit(elementId: string): void {
+    for (const mini of this.table.miniMissions ?? []) {
+      const st = this.miniState.get(mini.id);
+      if (!st || !st.armed) continue;
+      if (mini.goal.type === "hits" && mini.goal.elementId === elementId) st.hits++;
+    }
+  }
+
+  private miniCountGroup(groupId: string): void {
+    for (const mini of this.table.miniMissions ?? []) {
+      const st = this.miniState.get(mini.id);
+      if (!st || !st.armed) continue;
+      if (mini.goal.type === "group" && mini.goal.groupId === groupId) st.groups++;
+    }
+  }
+
+  private miniTick(): void {
+    for (const mini of this.table.miniMissions ?? []) {
+      const st = this.miniState.get(mini.id);
+      if (!st) continue;
+      if (st.doneFlash > 0) {
+        st.doneFlash = Math.max(0, st.doneFlash - 1 / 60);
+        continue;
+      }
+      if (!st.armed) continue;
+      const done =
+        mini.goal.type === "hits"
+          ? st.hits >= mini.goal.count
+          : mini.goal.type === "group"
+            ? st.groups >= 1
+            : (this.spinnerHoldTicks.get(mini.goal.spinnerId) ?? 0) / 60 >= mini.goal.seconds;
+      if (!done) continue;
+      st.armed = false;
+      st.doneFlash = 3;
+      this.score += mini.score;
+      this.emit({ type: "miniMissionComplete", id: mini.id, title: mini.title, score: mini.score });
+      addFlash(this.fx, 0.45);
+      addShake(this.fx, 6);
+      this.timers.push({
+        ticksLeft: TARGET_RESET_TICKS,
+        fn: () => {
+          const s2 = this.miniState.get(mini.id);
+          if (s2) {
+            s2.armed = true;
+            s2.hits = 0;
+            s2.groups = 0;
+          }
+          if (mini.goal.type === "spinnerHold") {
+            this.spinnerHoldTicks.set(mini.goal.spinnerId, 0);
+          }
+        },
+      });
+    }
+  }
+
+  private miniProgressText(mini: MiniMission): string {
+    const st = this.miniState.get(mini.id);
+    if (!st) return "";
+    switch (mini.goal.type) {
+      case "hits":
+        return `${Math.min(st.hits, mini.goal.count)}/${mini.goal.count}`;
+      case "group":
+        return `${Math.min(st.groups, 1)}/1`;
+      case "spinnerHold": {
+        const secs = (this.spinnerHoldTicks.get(mini.goal.spinnerId) ?? 0) / 60;
+        return `${Math.min(secs, mini.goal.seconds).toFixed(1)}/${mini.goal.seconds}s`;
+      }
+    }
+  }
+
+  /** Per-game numbers consumed by the meta layer at game over. */
+  getStats(): GameStatsSummary {
+    return {
+      durationMs: Math.max(0, performance.now() - this.gameStartMs),
+      ballsLaunched: this.ballsLaunchedGame,
+      skillShots: this.skillShotsGame,
+      ballSaves: this.ballSavesGame,
+      bestCombo: this.bestComboGame,
+      missionCompleted: this.missionCompletionsGame > 0,
+    };
+  }
+
   // -------------------------------------------------------------------- hud
 
   private objectiveText(): string {
@@ -996,6 +1262,18 @@ export class PinballGame implements GameHandle {
       kickbackArmed: this.kickbackArmed,
       muted: false,
       fps: Math.round(this.lastFps),
+      skillShotId: this.skillShotId,
+      ballSaveSeconds: this.ballSaveTicks / 60,
+      combo: this.comboCount,
+      miniMissions: (this.table.miniMissions ?? []).map((mini) => {
+        const st = this.miniState.get(mini.id);
+        return {
+          id: mini.id,
+          title: mini.title,
+          progress: st && st.doneFlash > 0 ? "✔" : this.miniProgressText(mini),
+          done: (st?.doneFlash ?? 0) > 0,
+        };
+      }),
     };
     this.cbs.onHud?.(hud);
   }

@@ -40,4 +40,6 @@ null
 - `src/game/*` nunca importa React; `src/components/pinball/*` nunca importa `matter-js`; o jogo inteiro entra por lazy import atrás de mount na rota `/` (browser-only, nada em SSR).
 - Geometria física e visual do frame (bordas, lane, guias, kickback, dreno) tem fonte única em `src/game/frame.ts`.
 - Toda mesa é autuada no espaço virtual 540×960; cores sempre via `TablePalette` da mesa, nunca hex avulso.
-- E2E/testes: a engine expõe `window.__nvGame` e `debugCompleteMission()` somente com `import.meta.env.DEV` (hook de verificação de multiball no Playwright); nunca deve chegar ao build de produção.
+- E2E/testes: a engine expõe `window.__nvGame`, `debugCompleteMission()`, `debugPlaceBall(id)` e `debugDrainBall()` somente com `import.meta.env.DEV` (hooks de verificação no Playwright); nunca devem chegar ao build de produção.
+- Metajogo (stats/conquistas/ajustes) vive em `src/game/progress.ts` com chave própria `neonvolt.progress.v1` (leitura tolerante); recordes permanecem em `neonvolt.v1` — nunca mover nem mesclar as chaves.
+- Gates (`WallChain.gate`) são sensores de passagem que pontuam (evento `ramp`); sem semântica direcional na engine — mesas novas não devem prometer bloqueio one-way.

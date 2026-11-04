@@ -61,6 +61,24 @@ export function validateTable(table: TableDef): ValidationIssue[] {
       issues.push({ tableId: table.id, message: `missão referencia grupo sem alvos: ${goal.groupId}` });
   }
 
+  // mini missions: unique ids, valid goals, sane score range
+  for (const mini of table.miniMissions ?? []) {
+    const goal = mini.goal;
+    if (ids.has(mini.id))
+      issues.push({ tableId: table.id, message: `mini-missão com id duplicado de elemento: ${mini.id}` });
+    if (goal.type === "hits" && !ids.has(goal.elementId))
+      issues.push({ tableId: table.id, message: `mini-missão referencia elemento inexistente: ${mini.id}` });
+    if (goal.type === "spinnerHold" && !ids.has(goal.spinnerId))
+      issues.push({ tableId: table.id, message: `mini-missão referencia spinner inexistente: ${mini.id}` });
+    if (goal.type === "group") {
+      const targets = table.elements.filter((e) => e.kind === "target" && e.group === goal.groupId);
+      if (targets.length === 0)
+        issues.push({ tableId: table.id, message: `mini-missão referencia grupo sem alvos: ${mini.id}` });
+    }
+    if (mini.score < 3000 || mini.score > 7500)
+      issues.push({ tableId: table.id, message: `mini-missão com pontuação fora da faixa: ${mini.id}` });
+  }
+
   // flipper sanity
   if (table.flippers.length !== 2)
     issues.push({ tableId: table.id, message: "uma mesa precisa de exatamente 2 flippers" });

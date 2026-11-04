@@ -21,6 +21,17 @@ export interface FxState {
 
 const MAX_PARTICLES = 420;
 
+let reduced = false;
+
+/** "Reduced effects" setting: fewer particles, no shake (accessibility). */
+export function setReducedFx(v: boolean): void {
+  reduced = v;
+}
+
+export function isReducedFx(): boolean {
+  return reduced;
+}
+
 export function createFx(): FxState {
   return { particles: [], shake: 0, flash: 0 };
 }
@@ -34,7 +45,7 @@ export function spawnBurst(
   opts?: { gravity?: number; size?: number; spread?: number; dir?: Vec2 },
 ): void {
   const budget = MAX_PARTICLES - fx.particles.length;
-  const n = Math.min(count, Math.max(0, budget));
+  const n = Math.min(reduced ? Math.ceil(count / 4) : count, Math.max(0, budget));
   for (let i = 0; i < n; i++) {
     const ang = Math.random() * Math.PI * 2;
     const mag = speed * (0.4 + Math.random() * 0.8);
@@ -54,6 +65,7 @@ export function spawnBurst(
 }
 
 export function addShake(fx: FxState, strength: number): void {
+  if (reduced) return;
   fx.shake = Math.min(14, Math.max(fx.shake, strength));
 }
 
