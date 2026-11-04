@@ -1,0 +1,1 @@
+Estudar profundamente o projeto e entender profundamente os propositos dele bem como cada pagina e recurso individualmente, pra planejar de forma muito bem elaborada as proximas melhorias de forma significativa e substancial em tudo que puder e fizer sentido ser melhorado
